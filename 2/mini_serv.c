@@ -7,7 +7,15 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-int max_fd, id = 0, arr_id[5000];
+typedef struct s_client {
+	int id;
+	int fd;
+	struct s_client *next;
+}	t_client;
+
+t_client *g_clients = NULL;
+
+int max_fd, id = 0/*, arr_id[5000]*/;
 fd_set read_set, write_set, actual_set;
 char server_msg[42], read_buffer[4096], *arr_str[5000];
 
@@ -70,13 +78,41 @@ void send_all(int not_you, char *msg) {
 	}
 }
 
-void add_client(int client_fd) {
-	max_fd = client_fd > max_fd ? client_fd : max_fd;
-	arr_id[client_fd] = id++;
-	arr_str[client_fd] = NULL;
-	FD_SET(client_fd, &actual_set);
-	sprintf(server_msg, "server: client %d just arrived\n", arr_id[client_fd]);
-	send_all(client_fd, server_msg);
+int add_client_to_list(int client_fd) {
+	// max_fd = client_fd > max_fd ? client_fd : max_fd;
+	// arr_id[client_fd] = id++;
+	// arr_str[client_fd] = NULL;
+	// FD_SET(client_fd, &actual_set);
+	// sprintf(server_msg, "server: client %d just arrived\n", arr_id[client_fd]);
+	// send_all(client_fd, server_msg);
+	t_client *temp = g_clients;
+    t_client *new;
+
+    if (!(new = calloc(1, sizeof(t_client))))
+        print_error("Fatal error\n");
+    new->id = id++;
+    new->fd = client_fd;
+    new->next = NULL;
+    if (!g_clients)
+    {
+        g_clients = new;
+    }
+    else
+    {
+        while (temp->next)
+            temp = temp->next;
+        temp->next = new;
+    }
+    return (new->id);
+}
+
+void accept_connection() {
+	struct sockaddr_in clientaddr;
+	socklen_t len = sizeof(clientaddr);
+
+	int client_fd;
+
+	if ((client_fd = accept()))
 }
 
 void remove_client(int fd) {
@@ -116,7 +152,7 @@ int main(int argc, char** argv) {
 	if (argc != 2)
 		print_error("Wrong number of arguments\n");
 	socklen_t len;
-	int server_socket, client_fd;
+	int client_fd, server_socket;
 	struct sockaddr_in servaddr, cli; 
 
 	bzero(&servaddr, sizeof(servaddr)); 

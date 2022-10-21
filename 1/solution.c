@@ -70,7 +70,7 @@ void	send_all(int fd, char *str_req)
     }
 }
 
-int		add_client_to_list(int fd)
+int		add_client_to_list(int client_fd)
 {
     t_client *temp = g_clients;
     t_client *new;
@@ -78,7 +78,7 @@ int		add_client_to_list(int fd)
     if (!(new = calloc(1, sizeof(t_client))))
         fatal();
     new->id = g_id++;
-    new->fd = fd;
+    new->fd = client_fd;
     new->next = NULL;
     if (!g_clients)
     {
@@ -180,7 +180,8 @@ int main(int ac, char **av)
     while(1)
     {
         cpy_write = cpy_read = curr_sock;
-        if (select(get_max_fd() + 1, &cpy_read, &cpy_write, NULL, NULL) < 0)
+        int res = 0;
+        if ((res = select(get_max_fd() + 1, &cpy_read, &cpy_write, NULL, NULL)) < 0)
             continue;
         for (int fd = 0; fd <= get_max_fd(); fd++)
         {
@@ -192,14 +193,15 @@ int main(int ac, char **av)
                     add_client();
                     break;
                 }
-                else{
-			int ret_recv = 1000;
-			while (ret_recv == 1000 || str[strlen(str) - 1] != '\n')
-			{
-				ret_recv = recv(fd, str + strlen(str), 1000, 0);
-				if (ret_recv <= 0)
-					break ;
-			}
+                else
+                {
+                    int ret_recv = 1000;
+                    while (ret_recv == 1000 || str[strlen(str) - 1] != '\n')
+                    {
+                        ret_recv = recv(fd, str + strlen(str), 1000, 0);
+                        if (ret_recv <= 0)
+                            break ;
+                    }
                     if (ret_recv <= 0)
                     {
                         bzero(&msg, sizeof(msg));

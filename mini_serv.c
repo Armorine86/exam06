@@ -1,13 +1,11 @@
 #include <errno.h>
-#include <stddef.h>
 #include <string.h>
-#include <sys/select.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 typedef struct s_client {
     int fd;
@@ -16,38 +14,24 @@ typedef struct s_client {
 } t_client;
 
 t_client *client = NULL;
-fd_set read_fd, write_fd, active_sockets;
-char serv_bcast[50];
-char read_buf[42*4096], copy_buf[42*4096], write_buf[42*4096+42];
-
 int server_socket, g_id = 0;
+char server_broadcast[50];
+char read_buf[42*4096], cpy_buf[42*4096], write_buf[42*4096+42];
+fd_set read_fd, write_fd, active_sockets;
 
-void print_error(char* msg) {
+void print_error(char *msg) {
     write(2, msg, strlen(msg));
     exit(1);
 }
 
 int get_max_fd() {
-    t_client *tmp = client;
     int max = server_socket;
 
-    while(tmp) {
+    for (t_client *tmp = client; tmp; tmp = tmp->next) {
         if (tmp->fd > max)
             max = tmp->fd;
-        tmp = tmp->next;
     }
     return max;
-}
-
-void send_all(int sender_fd, char* msg) {
-    t_client *tmp = client;
-
-    while(tmp) {
-        if (FD_ISSET(tmp->fd, &write_fd) && tmp->fd != sender_fd)
-            if (send(tmp->fd, msg, strlen(msg), 0) < 0)
-                print_error("Fatal error\n");
-        tmp = tmp->next;
-    }
 }
 
 int add_to_list(int client_fd) {
@@ -71,6 +55,14 @@ int add_to_list(int client_fd) {
     return new->id;
 }
 
+void send_all(int sender_fd, char* msg) {
+    for (t_client *tmp = client; tmp; tmp = tmp->next) {
+        if (FD_ISSET(tmp->fd, &write_fd) && tmp->fd != sender_fd)
+            if (send(tmp->fd, msg, strlen(msg), 0) < 0)
+                print_error("Fatal error\n");
+    }
+}
+
 void accept_connection() {
     struct sockaddr_in cli;
     socklen_t len = sizeof(cli);
@@ -79,77 +71,72 @@ void accept_connection() {
     if (client_fd < 0)
         print_error("Fatal error\n");
     
-    int client_id = add_to_list(client_fd);
-    bzero(serv_bcast, sizeof(serv_bcast));
-    sprintf(serv_bcast, "server: client %d just arrived\n", client_id);
-    send_all(server_socket, serv_bcast);
+    bzero(&server_broadcast, sizeof(server_broadcast));
+    sprintf(server_broadcast, "server: client %d just arrived\n", add_to_list(client_fd));
+    send_all(server_socket, server_broadcast);
     FD_SET(client_fd, &active_sockets);
 }
 
-int get_id(int fd) {
-    t_client *tmp = client;
-
-    while (tmp) {
+int get_client_id(int fd) {
+    for (t_client *tmp = client; tmp; tmp = tmp->next) {
         if (tmp->fd == fd)
             return tmp->id;
-        tmp = tmp->next;
     }
     return -1;
 }
 
-void disconnect_client(int fd) {
+void disconnect_client(int client_fd) {
     t_client *tmp = client;
     t_client *to_del = NULL;
 
-    int id = get_id(fd);
+    int client_id = get_client_id(client_fd);
 
-    if (tmp && tmp->fd == fd) {
+    if (tmp && tmp->fd == client_fd) {
         client = tmp->next;
         free(tmp);
     } else {
-        while (tmp && tmp->next && tmp->next->fd != fd)
+        while (tmp && tmp->next && tmp->next->fd != client_fd)
             tmp = tmp->next;
         to_del = tmp->next;
         tmp->next = tmp->next->next;
         free(to_del);
     }
-    bzero(&serv_bcast, sizeof(serv_bcast));
-    sprintf(serv_bcast, "server: client %d just left\n", id);
-    send_all(fd, serv_bcast);
-    FD_CLR(fd, &active_sockets);
-    close(fd);
+
+    bzero(&server_broadcast, sizeof(server_broadcast));
+    sprintf(server_broadcast, "server: client %d just left\n", client_id);
+    send_all(server_socket, server_broadcast);
+    FD_CLR(client_fd, &active_sockets);
+    close(client_fd);
 }
 
-void send_msg(int fd) {
+void send_message(int client_fd) {
     int i = 0;
     int j = 0;
-
     while (read_buf[i]) {
-        copy_buf[j] = read_buf[i];
+        cpy_buf[j] = read_buf[i];
         j++;
         if (read_buf[i] == '\n') {
-            copy_buf[j] = '\0';
-            sprintf(write_buf, "client %d: %s", get_id(fd), copy_buf);
-            send_all(fd, write_buf);
             bzero(&write_buf, sizeof(write_buf));
-            bzero(&copy_buf, sizeof(copy_buf));
+            sprintf(write_buf, "client %d: %s", get_client_id(client_fd), cpy_buf);
+            send_all(client_fd, write_buf);
+            bzero(&write_buf, sizeof(write_buf));
+            bzero(&cpy_buf, sizeof(cpy_buf));
+            j = 0;
         }
         i++;
     }
     bzero(&read_buf, sizeof(read_buf));
-
 }
 
-void send_or_disconnect() {
+void send_or_disconnect_client() {
     for (int fd = 3; fd <= get_max_fd(); fd++) {
         if (FD_ISSET(fd, &read_fd)) {
-            size_t count = recv(fd, read_buf, sizeof(read_buf), 0);
-
+            ssize_t count = recv(fd, &read_buf, sizeof(read_buf), 0);
             if (count <= 0) {
                 disconnect_client(fd);
                 break;
             } else {
-                send_msg(fd);
+                send_message(fd);
             }
         }
     }
@@ -161,12 +148,11 @@ int main(int ac, char** av) {
         print_error("Wrong number of arguments\n");
 
     struct sockaddr_in servaddr;
-
 	bzero(&servaddr, sizeof(servaddr)); 
 	servaddr.sin_family = AF_INET; 
 	servaddr.sin_addr.s_addr = htonl(2130706433); //127.0.0.1
 	servaddr.sin_port = htons(atoi(av[1])); 
-	
+  
 	if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         print_error("Fatal error\n");
 	if ((bind(server_socket, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
@@ -178,19 +164,18 @@ int main(int ac, char** av) {
     FD_SET(server_socket, &active_sockets);
     bzero(&read_buf, sizeof(read_buf));
     bzero(&write_buf, sizeof(write_buf));
-    bzero(&copy_buf, sizeof(copy_buf));
-    bzero(&serv_bcast, sizeof(serv_bcast));
-
+    bzero(&cpy_buf, sizeof(cpy_buf));
+    bzero(&server_broadcast, sizeof(server_broadcast));
+    
     while (42) {
         read_fd = write_fd = active_sockets;
         if (select(get_max_fd() + 1, &read_fd, &write_fd, NULL, NULL) < 0)
             continue;
-        
         if (FD_ISSET(server_socket, &read_fd)) {
             accept_connection();
             continue;
         } else {
-            send_or_disconnect();
+            send_or_disconnect_client();
         }
     }
 }
